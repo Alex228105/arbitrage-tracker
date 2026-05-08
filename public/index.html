@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arbitrage Tracker — UTEX vs Hyperliquid</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --surface2: #1a1a24;
+    --surface3: #22222f;
+    --border: #2a2a3a;
+    --text: #e8e8f0;
+    --muted: #6b6b85;
+    --utex-color: #00e5a0;
+    --hl-color: #ff4d6d;
+    --accent: #7c6bff;
+    --positive: #00e5a0;
+    --negative: #ff4d6d;
+    --warn: #ffb800;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline effect */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.015) 2px, rgba(255,255,255,0.015) 4px);
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .logo {
+    font-family: 'Space Mono', monospace;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(124,107,255,0.4); }
+    50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(124,107,255,0); }
+  }
+
+  .status-bar {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+  }
+
+  .status-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+  }
+
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+
+  .status-dot.online { background: var(--positive); animation: pulse 2s infinite; }
+  .status-dot.offline { background: var(--negative); }
+
+  .main {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    height: calc(100vh - 57px);
+  }
+
+  /* Sidebar */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-header {
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .sidebar-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .btn-add {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    font-weight: 500;
+  }
+
+  .btn-add:hover { opacity: 0.85; }
+
+  .pairs-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+  }
+
+  .pairs-list::-webkit-scrollbar { width: 4px; }
+  .pairs-list::-webkit-scrollbar-track { background: transparent; }
+  .pairs-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .pair-item {
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+    border: 1px solid transparent;
+    margin-bottom: 4px;
+    position: relative;
+  }
+
+  .pair-item:hover { background: var(--surface2); }
+  .pair-item.active { background: var(--surface2); border-color: var(--accent); }
+
+  .pair-name {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .pair-labels {
+    display: flex;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+  }
+
+  .label-utex { color: var(--utex-color); }
+  .label-hl { color: var(--hl-color); }
+
+  .pair-spread {
+    margin-top: 6px;
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+  }
+
+  .spread-positive { color: var(--positive); }
+  .spread-negative { color: var(--negative); }
+
+  .btn-delete {
+    position: absolute;
+    top: 8px; right: 8px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    padding: 2px 5px;
+  }
+
+  .pair-item:hover .btn-delete { opacity: 1; }
+  .btn-delete:hover { color: var(--negative); }
+
+  .empty-pairs {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  /* Chart area */
+  .chart-area {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  .chart-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    background: var(--surface);
+  }
+
+  .chart-pair-name {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+  }
+
+  .price-display {
+    display: flex;
+    gap: 24px;
+    align-items: center;
+  }
+
+  .price-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .price-label {
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    font-family: 'Space Mono', monospace;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .price-label-dot {
+    width: 8px; height: 2px;
+    border-radius: 1px;
+  }
+
+  .price-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    transition: color 0.3s;
+  }
+
+  .price-value.flash-up { color: var(--positive); }
+  .price-value.flash-down { color: var(--negative); }
+
+  .spread-display {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 16px;
+    text-align: center;
+  }
+
+  .spread-label {
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+  }
+
+  .spread-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 20px;
+    font-weight: 700;
+    margin-top: 2px;
+  }
+
+  .timeframe-selector {
+    display: flex;
+    gap: 4px;
+    background: var(--surface2);
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .tf-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 12px;
+    font-family: 'Space Mono', monospace;
+    padding: 4px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .tf-btn:hover { color: var(--text); background: var(--surface3); }
+  .tf-btn.active { background: var(--accent); color: #fff; }
+
+  .chart-container {
+    flex: 1;
+    padding: 16px 20px;
+    min-height: 0;
+    position: relative;
+  }
+
+  .chart-container canvas {
+    border-radius: 8px;
+  }
+
+  .no-pair-selected {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    gap: 12px;
+  }
+
+  .no-pair-icon {
+    font-size: 48px;
+    opacity: 0.3;
+  }
+
+  /* Modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    width: 400px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+
+  .modal-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 20px;
+    font-family: 'Space Mono', monospace;
+    letter-spacing: 0.5px;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+
+  .form-label {
+    display: block;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    margin-bottom: 6px;
+  }
+
+  .form-input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: 'DM Sans', sans-serif;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .form-input:focus { border-color: var(--accent); }
+
+  .form-hint {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+    justify-content: flex-end;
+  }
+
+  .btn-cancel {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 9px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-family: 'DM Sans', sans-serif;
+    transition: all 0.15s;
+  }
+
+  .btn-cancel:hover { border-color: var(--text); color: var(--text); }
+
+  .btn-confirm {
+    background: var(--accent);
+    border: none;
+    color: #fff;
+    padding: 9px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    transition: opacity 0.15s;
+  }
+
+  .btn-confirm:hover { opacity: 0.85; }
+
+  /* Alert badge */
+  .alert-badge {
+    display: none;
+    position: fixed;
+    top: 70px;
+    right: 24px;
+    background: var(--warn);
+    color: #000;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    z-index: 500;
+    animation: slideIn 0.3s ease;
+  }
+
+  @keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+
+  .live-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--positive);
+    font-family: 'Space Mono', monospace;
+  }
+
+  .live-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--positive);
+    animation: pulse 1.5s infinite;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    ARBITRAGE TRACKER
+  </div>
+  <div class="status-bar">
+    <div class="status-item">
+      <div class="status-dot" id="utex-status"></div>
+      <span>UTEX</span>
+    </div>
+    <div class="status-item">
+      <div class="status-dot" id="hl-status"></div>
+      <span>HYPERLIQUID</span>
+    </div>
+    <div class="live-indicator" id="live-indicator" style="display:none">
+      <div class="live-dot"></div>
+      LIVE
+    </div>
+  </div>
+</header>
+
+<div class="main">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-title">Пары</span>
+      <button class="btn-add" onclick="openModal()">+ Добавить</button>
+    </div>
+    <div class="pairs-list" id="pairs-list">
+      <div class="empty-pairs" id="empty-msg">
+        Нет пар.<br>Нажми «+ Добавить»<br>чтобы начать.
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart area -->
+  <div class="chart-area" id="chart-area">
+    <div class="no-pair-selected" id="no-pair">
+      <div class="no-pair-icon">◈</div>
+      <div>Выбери пару слева</div>
+    </div>
+
+    <div id="chart-view" style="display:none; flex-direction:column; height:100%;">
+      <div class="chart-header">
+        <div style="display:flex; align-items:center; gap:16px;">
+          <div class="chart-pair-name" id="chart-pair-name">—</div>
+          <div class="price-display">
+            <div class="price-block">
+              <div class="price-label">
+                <div class="price-label-dot" style="background:var(--utex-color)"></div>
+                UTEX
+              </div>
+              <div class="price-value" id="price-utex">—</div>
+            </div>
+            <div class="price-block">
+              <div class="price-label">
+                <div class="price-label-dot" style="background:var(--hl-color)"></div>
+                HYPERLIQUID
+              </div>
+              <div class="price-value" id="price-hl">—</div>
+            </div>
+          </div>
+          <div class="spread-display">
+            <div class="spread-label">Спред</div>
+            <div class="spread-value" id="spread-value">—</div>
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end;">
+          <div class="timeframe-selector" id="tf-selector">
+            <button class="tf-btn active" data-tf="20s" onclick="setTimeframe('20s',this)">20s</button>
+            <button class="tf-btn" data-tf="1m" onclick="setTimeframe('1m',this)">1m</button>
+            <button class="tf-btn" data-tf="15m" onclick="setTimeframe('15m',this)">15m</button>
+            <button class="tf-btn" data-tf="30m" onclick="setTimeframe('30m',this)">30m</button>
+            <button class="tf-btn" data-tf="1h" onclick="setTimeframe('1h',this)">1h</button>
+            <button class="tf-btn" data-tf="1d" onclick="setTimeframe('1d',this)">1d</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted);">
+            <span>Алерт при спреде ≥</span>
+            <input type="number" id="alert-threshold" placeholder="0.5" step="0.01"
+              style="width:70px; background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:4px 8px; border-radius:5px; font-size:12px; outline:none;"
+              onchange="saveAlert()">
+            <span>%</span>
+          </div>
+        </div>
+      </div>
+      <div class="chart-container">
+        <canvas id="priceChart"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Alert badge -->
+<div class="alert-badge" id="alert-badge">⚡ БОЛЬШОЙ СПРЕД!</div>
+
+<!-- Add pair modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-title">+ НОВАЯ ПАРА</div>
+    <div class="form-group">
+      <label class="form-label">Название пары</label>
+      <input class="form-input" id="f-name" placeholder="BTC Arbitrage">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Символ на UTEX</label>
+      <input class="form-input" id="f-utex" placeholder="BTC">
+      <div class="form-hint">Например: BTC, ETH, SOL</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Символ на Hyperliquid</label>
+      <input class="form-input" id="f-hl" placeholder="BTC">
+      <div class="form-hint">Например: BTC, ETH, SOL</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Отмена</button>
+      <button class="btn-confirm" onclick="addPair()">Добавить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const WS_URL = `ws://${location.host}`;
+let ws;
+let pairs = [];
+let prices = {};
+let activePairId = null;
+let chart = null;
+let currentTf = '20s';
+let alertThresholds = {};
+let lastAlertTime = {};
+
+const tfMs = { '20s': 20000, '1m': 60000, '15m': 900000, '30m': 1800000, '1h': 3600000, '1d': 86400000 };
+
+// History buffer per pair
+const localHistory = {};
+
+function connectWS() {
+  ws = new WebSocket(`ws://${location.host}`);
+  ws.onopen = () => {
+    document.getElementById('live-indicator').style.display = 'flex';
+  };
+  ws.onclose = () => {
+    document.getElementById('live-indicator').style.display = 'none';
+    setTimeout(connectWS, 2000);
+  };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'pairs') {
+      pairs = msg.pairs;
+      renderPairs();
+    }
+    if (msg.type === 'prices') {
+      prices = msg.prices;
+      renderPairs();
+    }
+    if (msg.type === 'price') {
+      handlePriceUpdate(msg);
+    }
+  };
+}
+
+function handlePriceUpdate(msg) {
+  const { pairId, utex, hl, ts } = msg;
+  if (!prices[pairId]) prices[pairId] = {};
+  prices[pairId].utex = { price: utex, ts };
+  prices[pairId].hl = { price: hl, ts };
+
+  if (!localHistory[pairId]) localHistory[pairId] = [];
+  localHistory[pairId].push({ ts, utex, hl });
+  if (localHistory[pairId].length > 10000) localHistory[pairId].splice(0, 1000);
+
+  // Update sidebar spread
+  const item = document.querySelector(`.pair-item[data-id="${pairId}"]`);
+  if (item) {
+    const spread = ((utex - hl) / hl * 100);
+    const el = item.querySelector('.pair-spread');
+    if (el) {
+      el.textContent = `Спред: ${spread >= 0 ? '+' : ''}${spread.toFixed(4)}%`;
+      el.className = 'pair-spread ' + (spread >= 0 ? 'spread-positive' : 'spread-negative');
+    }
+  }
+
+  // Update chart if this is the active pair
+  if (pairId === activePairId) {
+    updateChartLive(utex, hl, ts);
+    updatePriceDisplay(utex, hl);
+    checkAlert(pairId, utex, hl);
+  }
+}
+
+function updatePriceDisplay(utex, hl) {
+  const elU = document.getElementById('price-utex');
+  const elH = document.getElementById('price-hl');
+  const elS = document.getElementById('spread-value');
+
+  const prevU = parseFloat(elU.textContent.replace(/,/g, '')) || 0;
+  const prevH = parseFloat(elH.textContent.replace(/,/g, '')) || 0;
+
+  elU.textContent = formatPrice(utex);
+  elH.textContent = formatPrice(hl);
+
+  flashPrice(elU, utex > prevU ? 'up' : utex < prevU ? 'down' : null);
+  flashPrice(elH, hl > prevH ? 'up' : hl < prevH ? 'down' : null);
+
+  const spread = ((utex - hl) / hl * 100);
+  elS.textContent = `${spread >= 0 ? '+' : ''}${spread.toFixed(4)}%`;
+  elS.style.color = spread >= 0 ? 'var(--positive)' : 'var(--negative)';
+}
+
+function flashPrice(el, dir) {
+  if (!dir) return;
+  el.classList.remove('flash-up', 'flash-down');
+  void el.offsetWidth;
+  el.classList.add(dir === 'up' ? 'flash-up' : 'flash-down');
+  setTimeout(() => el.classList.remove('flash-up', 'flash-down'), 600);
+}
+
+function formatPrice(p) {
+  if (!p) return '—';
+  if (p >= 1000) return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (p >= 1) return p.toFixed(4);
+  return p.toFixed(6);
+}
+
+function renderPairs() {
+  const list = document.getElementById('pairs-list');
+  const empty = document.getElementById('empty-msg');
+
+  if (pairs.length === 0) {
+    list.innerHTML = '';
+    list.appendChild(empty);
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  // Preserve existing items, update or add
+  pairs.forEach(p => {
+    let item = list.querySelector(`.pair-item[data-id="${p.id}"]`);
+    if (!item) {
+      item = document.createElement('div');
+      item.className = 'pair-item';
+      item.dataset.id = p.id;
+      item.innerHTML = `
+        <div class="pair-name">
+          <span>${p.name}</span>
+          <button class="btn-delete" onclick="deletePair('${p.id}', event)">✕</button>
+        </div>
+        <div class="pair-labels">
+          <span class="label-utex">UTEX: ${p.utexSymbol}</span>
+          <span style="color:var(--border)">|</span>
+          <span class="label-hl">HL: ${p.hlSymbol}</span>
+        </div>
+        <div class="pair-spread spread-positive">Ожидание данных...</div>
+      `;
+      item.addEventListener('click', (e) => {
+        if (e.target.classList.contains('btn-delete')) return;
+        selectPair(p.id);
+      });
+      list.appendChild(item);
+    }
+    if (p.id === activePairId) item.classList.add('active');
+  });
+
+  // Remove deleted
+  list.querySelectorAll('.pair-item').forEach(item => {
+    if (!pairs.find(p => p.id === item.dataset.id)) item.remove();
+  });
+}
+
+function selectPair(id) {
+  activePairId = id;
+  document.querySelectorAll('.pair-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.id === id);
+  });
+
+  const pair = pairs.find(p => p.id === id);
+  if (!pair) return;
+
+  document.getElementById('no-pair').style.display = 'none';
+  const cv = document.getElementById('chart-view');
+  cv.style.display = 'flex';
+  document.getElementById('chart-pair-name').textContent = pair.name;
+
+  // Load alert threshold
+  const thresh = alertThresholds[id] || '';
+  document.getElementById('alert-threshold').value = thresh;
+
+  // Load history and init chart
+  fetch(`/api/history/${id}`)
+    .then(r => r.json())
+    .then(hist => {
+      // Merge with local history
+      const combined = [...hist, ...(localHistory[id] || [])];
+      // Deduplicate by ts
+      const seen = new Set();
+      const deduped = combined.filter(h => {
+        if (seen.has(h.ts)) return false;
+        seen.add(h.ts); return true;
+      }).sort((a, b) => a.ts - b.ts);
+      localHistory[id] = deduped;
+      initChart(deduped);
+    });
+
+  // Update price display
+  if (prices[id] && prices[id].utex && prices[id].hl) {
+    updatePriceDisplay(prices[id].utex.price, prices[id].hl.price);
+  }
+}
+
+function initChart(histData) {
+  const ctx = document.getElementById('priceChart').getContext('2d');
+  if (chart) { chart.destroy(); chart = null; }
+
+  const filtered = filterByTimeframe(histData, currentTf);
+  const utexData = filtered.map(h => ({ x: h.ts, y: h.utex }));
+  const hlData = filtered.map(h => ({ x: h.ts, y: h.hl }));
+
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: 'UTEX',
+          data: utexData,
+          borderColor: '#00e5a0',
+          backgroundColor: 'rgba(0,229,160,0.05)',
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          tension: 0.3,
+          fill: false,
+        },
+        {
+          label: 'Hyperliquid',
+          data: hlData,
+          borderColor: '#ff4d6d',
+          backgroundColor: 'rgba(255,77,109,0.05)',
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          tension: 0.3,
+          fill: false,
+        }
+      ]
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          labels: {
+            color: '#6b6b85',
+            font: { family: 'Space Mono', size: 11 },
+            boxWidth: 20,
+            padding: 16,
+          }
+        },
+        tooltip: {
+          backgroundColor: '#1a1a24',
+          borderColor: '#2a2a3a',
+          borderWidth: 1,
+          titleColor: '#6b6b85',
+          bodyColor: '#e8e8f0',
+          titleFont: { family: 'Space Mono', size: 10 },
+          bodyFont: { family: 'Space Mono', size: 12 },
+          callbacks: {
+            label: (ctx) => ` ${ctx.dataset.label}: ${formatPrice(ctx.raw.y)}`,
+            afterBody: (items) => {
+              if (items.length >= 2) {
+                const u = items[0].raw.y, h = items[1].raw.y;
+                const sp = ((u - h) / h * 100);
+                return [``, ` Спред: ${sp >= 0 ? '+' : ''}${sp.toFixed(4)}%`];
+              }
+              return [];
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'HH:mm:ss' },
+          grid: { color: '#1a1a24' },
+          ticks: { color: '#6b6b85', font: { family: 'Space Mono', size: 10 }, maxTicksLimit: 8 }
+        },
+        y: {
+          grid: { color: '#1a1a24' },
+          ticks: {
+            color: '#6b6b85',
+            font: { family: 'Space Mono', size: 10 },
+            callback: (v) => formatPrice(v)
+          }
+        }
+      }
+    }
+  });
+}
+
+function updateChartLive(utex, hl, ts) {
+  if (!chart) return;
+  const maxPoints = 2000;
+  chart.data.datasets[0].data.push({ x: ts, y: utex });
+  chart.data.datasets[1].data.push({ x: ts, y: hl });
+
+  // Trim old points outside timeframe
+  const cutoff = Date.now() - tfMs[currentTf];
+  chart.data.datasets.forEach(ds => {
+    while (ds.data.length > 0 && ds.data[0].x < cutoff) ds.data.shift();
+    if (ds.data.length > maxPoints) ds.data.splice(0, ds.data.length - maxPoints);
+  });
+
+  chart.update('none');
+}
+
+function filterByTimeframe(data, tf) {
+  const cutoff = Date.now() - tfMs[tf];
+  return data.filter(h => h.ts >= cutoff);
+}
+
+function setTimeframe(tf, btn) {
+  currentTf = tf;
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (activePairId) {
+    const hist = localHistory[activePairId] || [];
+    initChart(hist);
+  }
+}
+
+function checkAlert(pairId, utex, hl) {
+  const threshold = alertThresholds[pairId];
+  if (!threshold) return;
+  const spread = Math.abs((utex - hl) / hl * 100);
+  if (spread >= threshold) {
+    const now = Date.now();
+    if (!lastAlertTime[pairId] || now - lastAlertTime[pairId] > 10000) {
+      lastAlertTime[pairId] = now;
+      showAlert(`⚡ Спред ${spread.toFixed(4)}%`);
+      playAlertSound();
+    }
+  }
+}
+
+function showAlert(msg) {
+  const el = document.getElementById('alert-badge');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 5000);
+}
+
+function playAlertSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.1);
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.4);
+  } catch {}
+}
+
+function saveAlert() {
+  if (!activePairId) return;
+  const val = parseFloat(document.getElementById('alert-threshold').value);
+  alertThresholds[activePairId] = val || 0;
+  fetch('/api/alert', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pairId: activePairId, threshold: val })
+  });
+}
+
+// Modal
+function openModal() {
+  document.getElementById('modal').classList.add('open');
+  document.getElementById('f-name').focus();
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-utex').value = '';
+  document.getElementById('f-hl').value = '';
+}
+
+function addPair() {
+  const name = document.getElementById('f-name').value.trim();
+  const utexSymbol = document.getElementById('f-utex').value.trim().toUpperCase();
+  const hlSymbol = document.getElementById('f-hl').value.trim().toUpperCase();
+  if (!name || !utexSymbol || !hlSymbol) { alert('Заполни все поля'); return; }
+
+  fetch('/api/pairs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, utexSymbol, hlSymbol })
+  }).then(r => r.json()).then(pair => {
+    closeModal();
+  });
+}
+
+function deletePair(id, e) {
+  e.stopPropagation();
+  if (!confirm('Удалить пару?')) return;
+  fetch(`/api/pairs/${id}`, { method: 'DELETE' });
+  if (activePairId === id) {
+    activePairId = null;
+    document.getElementById('no-pair').style.display = 'flex';
+    document.getElementById('chart-view').style.display = 'none';
+  }
+}
+
+// Close modal on overlay click
+document.getElementById('modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+// Enter key in modal
+document.querySelectorAll('.form-input').forEach(inp => {
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') addPair(); });
+});
+
+// Status updates (poll server periodically for connection status)
+function updateStatus() {
+  fetch('/api/prices').then(r => r.json()).then(p => {
+    // Simple heuristic: if any price updated in last 5s = online
+    const now = Date.now();
+    let utexOnline = false, hlOnline = false;
+    Object.values(p).forEach(pr => {
+      if (pr.utex && now - pr.utex.ts < 10000) utexOnline = true;
+      if (pr.hl && now - pr.hl.ts < 10000) hlOnline = true;
+    });
+    document.getElementById('utex-status').className = 'status-dot ' + (utexOnline ? 'online' : '');
+    document.getElementById('hl-status').className = 'status-dot ' + (hlOnline ? 'online' : '');
+  }).catch(() => {});
+}
+
+setInterval(updateStatus, 3000);
+connectWS();
+</script>
+</body>
+</html>
