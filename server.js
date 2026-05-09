@@ -3,6 +3,7 @@ const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 
 const app = express();
 const server = http.createServer(app);
@@ -21,9 +22,9 @@ const prices = {};
 const history = {};
 const MAX_HISTORY = 5000;
 
-function addHistory(pairId, utexPrice, hlPrice) {
+function addHistory(pairId, p1Price, p2Price) {
   if (!history[pairId]) history[pairId] = [];
-  history[pairId].push({ ts: Date.now(), utex: utexPrice, hl: hlPrice });
+  history[pairId].push({ ts: Date.now(), p1: p1Price, p2: p2Price });
   if (history[pairId].length > MAX_HISTORY) history[pairId].splice(0, history[pairId].length - MAX_HISTORY);
 }
 
@@ -32,96 +33,78 @@ function broadcast(data) {
   wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
 }
 
-// ── UTEX ─────────────────────────────────────────────────────────
-// Real message format observed:
-// t=7, d: { i: subId, d: { moment: ts, markPrice: "4241000000", price: "4241000000", ... } }
-// Prices are in microdollars (× 10^6)
-// Heartbeat: t=5, reply t=6
+// ── Yahoo Finance (polling every 5s) ─────────────────────────────
+function fetchYahooPrice(symbol) {
+  return new Promise((resolve, reject) => {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1m&range=1d`;
+    const options = {
+      hostname: 'query1.finance.yahoo.com',
+      path: `/v8/finance/chart/${symbol}?interval=1m&range=1d`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+      }
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          const result = json?.chart?.result?.[0];
+          const price = result?.meta?.regularMarketPrice;
+          if (price) resolve(parseFloat(price));
+          else reject(new Error('No price in response'));
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error('Timeout')); });
+    req.end();
+  });
+}
 
-let utexWs = null;
-let utexReady = false;
-let utexSubId = 1;
-const utexSubIds = {};   // sym -> id
-const utexIdSymbol = {}; // id -> sym
-let utexSymbolMap = {};  // sym -> [pairId, ...]
+// Poll Yahoo for all yahoo symbols every 5 seconds
+const yahooSymbols = {}; // symbol -> [pairId, ...]
 
-function buildUtexSymbolMap() {
-  utexSymbolMap = {};
+function buildYahooSymbolMap() {
+  Object.keys(yahooSymbols).forEach(k => delete yahooSymbols[k]);
   pairs.forEach(p => {
-    if (!utexSymbolMap[p.utexSymbol]) utexSymbolMap[p.utexSymbol] = [];
-    utexSymbolMap[p.utexSymbol].push(p.id);
+    if (!yahooSymbols[p.p1Symbol]) yahooSymbols[p.p1Symbol] = [];
+    yahooSymbols[p.p1Symbol].push(p.id);
   });
 }
 
-function connectUtex() {
-  if (utexWs) { try { utexWs.terminate(); } catch {} }
-  utexWs = new WebSocket('wss://ususdt-api-margin.utex.io/ws');
-
-  utexWs.on('open', () => {
-    utexReady = true;
-    console.log('[UTEX] connected');
-    Object.keys(utexSymbolMap).forEach(sym => subscribeUtex(sym));
-  });
-
-  utexWs.on('message', (raw) => {
+async function pollYahoo() {
+  const symbols = Object.keys(yahooSymbols);
+  for (const sym of symbols) {
     try {
-      const msg = JSON.parse(raw.toString());
-      // Heartbeat
-      if (msg.t === 5) {
-        utexWs.send(JSON.stringify({ t: 6, d: msg.d }));
-        return;
-      }
-      // Price update (t=7) or snapshot (t=1)
-      // d: { i: subscriptionId, d: { markPrice: "...", price: "...", moment: ... } }
-      if ((msg.t === 7 || msg.t === 1) && msg.d && msg.d.i !== undefined) {
-        const sym = utexIdSymbol[msg.d.i];
-        if (!sym) return;
-        const inner = msg.d.d || {};
-        // markPrice and price are in microdollars
-        const raw = inner.markPrice || inner.price;
-        if (raw) {
-          const price = parseFloat(raw) / 1e6;
-          if (price > 0) updateUtexPrice(sym, price);
-        }
-      }
-    } catch (e) { console.error('[UTEX] parse error:', e.message); }
-  });
-
-  utexWs.on('close', () => {
-    utexReady = false;
-    console.log('[UTEX] disconnected, reconnect in 3s');
-    setTimeout(connectUtex, 3000);
-  });
-
-  utexWs.on('error', e => console.error('[UTEX] error:', e.message));
+      const price = await fetchYahooPrice(sym);
+      updateP1Price(sym, price);
+      console.log(`[Yahoo] ${sym} = ${price}`);
+    } catch (e) {
+      console.error(`[Yahoo] ${sym} error:`, e.message);
+    }
+  }
 }
 
-function subscribeUtex(sym) {
-  if (!utexReady || !utexWs || utexWs.readyState !== WebSocket.OPEN) return;
-  if (utexSubIds[sym]) return;
-  const id = utexSubId++;
-  utexSubIds[sym] = id;
-  utexIdSymbol[id] = sym;
-  // t=3 = subscribe request based on observed protocol
-  const msg = { t: 3, d: { i: id, s: sym } };
-  console.log('[UTEX] subscribe:', JSON.stringify(msg));
-  utexWs.send(JSON.stringify(msg));
-}
-
-function updateUtexPrice(sym, price) {
-  const pairIds = utexSymbolMap[sym] || [];
+function updateP1Price(sym, price) {
+  const pairIds = yahooSymbols[sym] || [];
   pairIds.forEach(pid => {
     if (!prices[pid]) prices[pid] = {};
-    prices[pid].utex = { price, ts: Date.now() };
-    const hl = prices[pid].hl;
-    if (hl) {
-      addHistory(pid, price, hl.price);
-      broadcast({ type: 'price', pairId: pid, utex: price, hl: hl.price, ts: Date.now() });
+    prices[pid].p1 = { price, ts: Date.now() };
+    const p2 = prices[pid].p2;
+    if (p2) {
+      addHistory(pid, price, p2.price);
+      broadcast({ type: 'price', pairId: pid, p1: price, p2: p2.price, ts: Date.now() });
     }
   });
 }
 
-// ── Hyperliquid ───────────────────────────────────────────────────
+setInterval(pollYahoo, 5000);
+
+// ── Hyperliquid WebSocket ─────────────────────────────────────────
 let hlWs = null;
 let hlReady = false;
 const hlSubscribed = new Set();
@@ -133,21 +116,19 @@ function connectHyperliquid() {
   hlWs.on('open', () => {
     hlReady = true;
     console.log('[HL] connected');
-    const syms = new Set(pairs.map(p => p.hlSymbol));
+    const syms = new Set(pairs.map(p => p.p2Symbol));
     syms.forEach(subscribeHL);
   });
 
   hlWs.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
-      // Trade feed: { channel: 'trades', data: [{coin, px, ...}] }
       if (msg.channel === 'trades' && msg.data) {
         const list = Array.isArray(msg.data) ? msg.data : [msg.data];
-        list.forEach(t => { if (t.coin && t.px) updateHLPrice(t.coin, parseFloat(t.px)); });
+        list.forEach(t => { if (t.coin && t.px) updateP2Price(t.coin, parseFloat(t.px)); });
       }
-      // AllMids: { channel: 'allMids', data: { mids: { BTC: '95000', ... } } }
       if (msg.channel === 'allMids' && msg.data && msg.data.mids) {
-        Object.entries(msg.data.mids).forEach(([coin, px]) => updateHLPrice(coin, parseFloat(px)));
+        Object.entries(msg.data.mids).forEach(([coin, px]) => updateP2Price(coin, parseFloat(px)));
       }
     } catch {}
   });
@@ -169,15 +150,15 @@ function subscribeHL(sym) {
   console.log('[HL] subscribed:', sym);
 }
 
-function updateHLPrice(sym, price) {
+function updateP2Price(sym, price) {
   if (!price || isNaN(price)) return;
-  pairs.filter(p => p.hlSymbol === sym).forEach(p => {
+  pairs.filter(p => p.p2Symbol === sym).forEach(p => {
     if (!prices[p.id]) prices[p.id] = {};
-    prices[p.id].hl = { price, ts: Date.now() };
-    const utex = prices[p.id].utex;
-    if (utex) {
-      addHistory(p.id, utex.price, price);
-      broadcast({ type: 'price', pairId: p.id, utex: utex.price, hl: price, ts: Date.now() });
+    prices[p.id].p2 = { price, ts: Date.now() };
+    const p1 = prices[p.id].p1;
+    if (p1) {
+      addHistory(p.id, p1.price, price);
+      broadcast({ type: 'price', pairId: p.id, p1: p1.price, p2: price, ts: Date.now() });
     }
   });
 }
@@ -186,15 +167,14 @@ function updateHLPrice(sym, price) {
 app.get('/api/pairs', (req, res) => res.json(pairs));
 
 app.post('/api/pairs', (req, res) => {
-  const { name, utexSymbol, hlSymbol } = req.body;
-  if (!name || !utexSymbol || !hlSymbol) return res.status(400).json({ error: 'Missing fields' });
+  const { name, p1Symbol, p2Symbol } = req.body;
+  if (!name || !p1Symbol || !p2Symbol) return res.status(400).json({ error: 'Missing fields' });
   const id = Date.now().toString();
-  const pair = { id, name, utexSymbol: utexSymbol.toUpperCase(), hlSymbol: hlSymbol.toUpperCase() };
+  const pair = { id, name, p1Symbol: p1Symbol.toUpperCase(), p2Symbol: p2Symbol.toUpperCase() };
   pairs.push(pair);
   savePairs();
-  buildUtexSymbolMap();
-  if (utexReady) subscribeUtex(pair.utexSymbol);
-  if (hlReady) subscribeHL(pair.hlSymbol);
+  buildYahooSymbolMap();
+  if (hlReady) subscribeHL(pair.p2Symbol);
   broadcast({ type: 'pairs', pairs });
   res.json(pair);
 });
@@ -204,7 +184,7 @@ app.delete('/api/pairs/:id', (req, res) => {
   delete prices[req.params.id];
   delete history[req.params.id];
   savePairs();
-  buildUtexSymbolMap();
+  buildYahooSymbolMap();
   broadcast({ type: 'pairs', pairs });
   res.json({ ok: true });
 });
@@ -221,7 +201,7 @@ wss.on('connection', (ws) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server on port ${PORT}`);
-  buildUtexSymbolMap();
-  connectUtex();
+  buildYahooSymbolMap();
   connectHyperliquid();
+  setTimeout(pollYahoo, 2000);
 });
