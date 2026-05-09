@@ -3,7 +3,6 @@ const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const path = require('path');
 const fs = require('fs');
-const https = require('https');
 
 const app = express();
 const server = http.createServer(app);
@@ -33,64 +32,68 @@ function broadcast(data) {
   wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
 }
 
-// ── Yahoo Finance (polling every 5s) ─────────────────────────────
-function fetchYahooPrice(symbol) {
-  return new Promise((resolve, reject) => {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1m&range=1d`;
-    const options = {
-      hostname: 'query1.finance.yahoo.com',
-      path: `/v8/finance/chart/${symbol}?interval=1m&range=1d`,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-      }
-    };
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          const result = json?.chart?.result?.[0];
-          const price = result?.meta?.regularMarketPrice;
-          if (price) resolve(parseFloat(price));
-          else reject(new Error('No price in response'));
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(5000, () => { req.destroy(); reject(new Error('Timeout')); });
-    req.end();
-  });
-}
+// ── Bybit WebSocket ───────────────────────────────────────────────
+let bybitWs = null;
+let bybitReady = false;
+const bybitSubscribed = new Set();
+const bybitSymbolMap = {}; // symbol -> [pairId]
 
-// Poll Yahoo for all yahoo symbols every 5 seconds
-const yahooSymbols = {}; // symbol -> [pairId, ...]
-
-function buildYahooSymbolMap() {
-  Object.keys(yahooSymbols).forEach(k => delete yahooSymbols[k]);
+function buildBybitSymbolMap() {
+  Object.keys(bybitSymbolMap).forEach(k => delete bybitSymbolMap[k]);
   pairs.forEach(p => {
-    if (!yahooSymbols[p.p1Symbol]) yahooSymbols[p.p1Symbol] = [];
-    yahooSymbols[p.p1Symbol].push(p.id);
+    if (!bybitSymbolMap[p.p1Symbol]) bybitSymbolMap[p.p1Symbol] = [];
+    bybitSymbolMap[p.p1Symbol].push(p.id);
   });
 }
 
-async function pollYahoo() {
-  const symbols = Object.keys(yahooSymbols);
-  for (const sym of symbols) {
+function connectBybit() {
+  if (bybitWs) { try { bybitWs.terminate(); } catch {} }
+  bybitWs = new WebSocket('wss://stream.bybit.com/v5/public/linear');
+
+  bybitWs.on('open', () => {
+    bybitReady = true;
+    console.log('[Bybit] connected');
+    const syms = new Set(pairs.map(p => p.p1Symbol));
+    syms.forEach(subscribeBybit);
+    // Heartbeat every 20s
+    setInterval(() => {
+      if (bybitWs && bybitWs.readyState === WebSocket.OPEN) {
+        bybitWs.send(JSON.stringify({ op: 'ping' }));
+      }
+    }, 20000);
+  });
+
+  bybitWs.on('message', (raw) => {
     try {
-      const price = await fetchYahooPrice(sym);
-      updateP1Price(sym, price);
-      console.log(`[Yahoo] ${sym} = ${price}`);
-    } catch (e) {
-      console.error(`[Yahoo] ${sym} error:`, e.message);
-    }
-  }
+      const msg = JSON.parse(raw.toString());
+      if (msg.topic && msg.topic.startsWith('tickers.') && msg.data) {
+        const sym = msg.topic.replace('tickers.', '');
+        const price = parseFloat(msg.data.lastPrice);
+        if (price) updateP1Price(sym, price);
+      }
+    } catch {}
+  });
+
+  bybitWs.on('close', () => {
+    bybitReady = false;
+    bybitSubscribed.clear();
+    console.log('[Bybit] disconnected, reconnect in 3s');
+    setTimeout(connectBybit, 3000);
+  });
+
+  bybitWs.on('error', e => console.error('[Bybit] error:', e.message));
+}
+
+function subscribeBybit(sym) {
+  if (!bybitReady || !bybitWs || bybitWs.readyState !== WebSocket.OPEN) return;
+  if (bybitSubscribed.has(sym)) return;
+  bybitSubscribed.add(sym);
+  bybitWs.send(JSON.stringify({ op: 'subscribe', args: [`tickers.${sym}`] }));
+  console.log('[Bybit] subscribed:', sym);
 }
 
 function updateP1Price(sym, price) {
-  const pairIds = yahooSymbols[sym] || [];
+  const pairIds = bybitSymbolMap[sym] || [];
   pairIds.forEach(pid => {
     if (!prices[pid]) prices[pid] = {};
     prices[pid].p1 = { price, ts: Date.now() };
@@ -101,8 +104,6 @@ function updateP1Price(sym, price) {
     }
   });
 }
-
-setInterval(pollYahoo, 5000);
 
 // ── Hyperliquid WebSocket ─────────────────────────────────────────
 let hlWs = null;
@@ -173,7 +174,8 @@ app.post('/api/pairs', (req, res) => {
   const pair = { id, name, p1Symbol: p1Symbol.toUpperCase(), p2Symbol: p2Symbol.toUpperCase() };
   pairs.push(pair);
   savePairs();
-  buildYahooSymbolMap();
+  buildBybitSymbolMap();
+  if (bybitReady) subscribeBybit(pair.p1Symbol);
   if (hlReady) subscribeHL(pair.p2Symbol);
   broadcast({ type: 'pairs', pairs });
   res.json(pair);
@@ -184,7 +186,7 @@ app.delete('/api/pairs/:id', (req, res) => {
   delete prices[req.params.id];
   delete history[req.params.id];
   savePairs();
-  buildYahooSymbolMap();
+  buildBybitSymbolMap();
   broadcast({ type: 'pairs', pairs });
   res.json({ ok: true });
 });
@@ -201,7 +203,7 @@ wss.on('connection', (ws) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server on port ${PORT}`);
-  buildYahooSymbolMap();
+  buildBybitSymbolMap();
+  connectBybit();
   connectHyperliquid();
-  setTimeout(pollYahoo, 2000);
 });
