@@ -188,8 +188,8 @@
     font-family: 'Space Mono', monospace;
   }
 
-  .label-utex { color: var(--utex-color); }
-  .label-hl { color: var(--hl-color); }
+  .label-p1 { color: var(--utex-color); }
+  .label-p2 { color: var(--hl-color); }
 
   .pair-spread {
     margin-top: 6px;
@@ -510,12 +510,12 @@
   </div>
   <div class="status-bar">
     <div class="status-item">
-      <div class="status-dot" id="utex-status"></div>
-      <span>UTEX</span>
+      <div class="status-dot" id="p1-status"></div>
+      <span>Yahoo Finance</span>
     </div>
     <div class="status-item">
-      <div class="status-dot" id="hl-status"></div>
-      <span>HYPERLIQUID</span>
+      <div class="status-dot" id="p2-status"></div>
+      <span>Hyperliquid</span>
     </div>
     <div class="live-indicator" id="live-indicator" style="display:none">
       <div class="live-dot"></div>
@@ -555,14 +555,14 @@
                 <div class="price-label-dot" style="background:var(--utex-color)"></div>
                 UTEX
               </div>
-              <div class="price-value" id="price-utex">—</div>
+              <div class="price-value" id="price-p1">—</div>
             </div>
             <div class="price-block">
               <div class="price-label">
                 <div class="price-label-dot" style="background:var(--hl-color)"></div>
                 HYPERLIQUID
               </div>
-              <div class="price-value" id="price-hl">—</div>
+              <div class="price-value" id="price-p2">—</div>
             </div>
           </div>
           <div class="spread-display">
@@ -608,13 +608,13 @@
     </div>
     <div class="form-group">
       <label class="form-label">Символ на UTEX</label>
-      <input class="form-input" id="f-utex" placeholder="BTC">
-      <div class="form-hint">Например: BTC, ETH, SOL</div>
+      <input class="form-input" id="f-p1" placeholder="BTC">
+      <div class="form-hint">Например: AAPL, TSLA, NVDA</div>
     </div>
     <div class="form-group">
       <label class="form-label">Символ на Hyperliquid</label>
-      <input class="form-input" id="f-hl" placeholder="BTC">
-      <div class="form-hint">Например: BTC, ETH, SOL</div>
+      <input class="form-input" id="f-p2" placeholder="BTC">
+      <div class="form-hint">Например: AAPL, TSLA, NVDA</div>
     </div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeModal()">Отмена</button>
@@ -694,8 +694,8 @@ function handlePriceUpdate(msg) {
 }
 
 function updatePriceDisplay(utex, hl) {
-  const elU = document.getElementById('price-utex');
-  const elH = document.getElementById('price-hl');
+  const elU = document.getElementById('price-p1');
+  const elH = document.getElementById('price-p2');
   const elS = document.getElementById('spread-value');
 
   const prevU = parseFloat(elU.textContent.replace(/,/g, '')) || 0;
@@ -752,9 +752,9 @@ function renderPairs() {
           <button class="btn-delete" onclick="deletePair('${p.id}', event)">✕</button>
         </div>
         <div class="pair-labels">
-          <span class="label-utex">UTEX: ${p.utexSymbol}</span>
+          <span class="label-p1">UTEX: ${p.p1Symbol}</span>
           <span style="color:var(--border)">|</span>
-          <span class="label-hl">HL: ${p.hlSymbol}</span>
+          <span class="label-p2">HL: ${p.p2Symbol}</span>
         </div>
         <div class="pair-spread spread-positive">Ожидание данных...</div>
       `;
@@ -809,7 +809,7 @@ function selectPair(id) {
 
   // Update price display
   if (prices[id] && prices[id].utex && prices[id].hl) {
-    updatePriceDisplay(prices[id].utex.price, prices[id].hl.price);
+    updatePriceDisplay(prices[id].p1.price, prices[id].p2.price);
   }
 }
 
@@ -818,8 +818,8 @@ function initChart(histData) {
   if (chart) { chart.destroy(); chart = null; }
 
   const filtered = filterByTimeframe(histData, currentTf);
-  const utexData = filtered.map(h => ({ x: h.ts, y: h.utex }));
-  const hlData = filtered.map(h => ({ x: h.ts, y: h.hl }));
+  const utexData = filtered.map(h => ({ x: h.ts, y: h.p1 }));
+  const hlData = filtered.map(h => ({ x: h.ts, y: h.p2 }));
 
   chart = new Chart(ctx, {
     type: 'line',
@@ -993,20 +993,20 @@ function openModal() {
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
   document.getElementById('f-name').value = '';
-  document.getElementById('f-utex').value = '';
-  document.getElementById('f-hl').value = '';
+  document.getElementById('f-p1').value = '';
+  document.getElementById('f-p2').value = '';
 }
 
 function addPair() {
   const name = document.getElementById('f-name').value.trim();
-  const utexSymbol = document.getElementById('f-utex').value.trim().toUpperCase();
-  const hlSymbol = document.getElementById('f-hl').value.trim().toUpperCase();
-  if (!name || !utexSymbol || !hlSymbol) { alert('Заполни все поля'); return; }
+  const p1Symbol = document.getElementById('f-p1').value.trim().toUpperCase();
+  const p2Symbol = document.getElementById('f-p2').value.trim().toUpperCase();
+  if (!name || !p1Symbol || !p2Symbol) { alert('Заполни все поля'); return; }
 
   fetch('/api/pairs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, utexSymbol, hlSymbol })
+    body: JSON.stringify({ name, p1Symbol, p2Symbol })
   }).then(r => r.json()).then(pair => {
     closeModal();
   });
@@ -1043,8 +1043,8 @@ function updateStatus() {
       if (pr.utex && now - pr.utex.ts < 10000) utexOnline = true;
       if (pr.hl && now - pr.hl.ts < 10000) hlOnline = true;
     });
-    document.getElementById('utex-status').className = 'status-dot ' + (utexOnline ? 'online' : '');
-    document.getElementById('hl-status').className = 'status-dot ' + (hlOnline ? 'online' : '');
+    document.getElementById('p1-status').className = 'status-dot ' + (utexOnline ? 'online' : '');
+    document.getElementById('p2-status').className = 'status-dot ' + (hlOnline ? 'online' : '');
   }).catch(() => {});
 }
 
