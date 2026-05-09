@@ -624,7 +624,7 @@
 </div>
 
 <script>
-const WS_URL = `ws://${location.host}`;
+const WS_PROTO = location.protocol === 'https:' ? 'wss:' : 'ws:';
 let ws;
 let pairs = [];
 let prices = {};
@@ -640,7 +640,7 @@ const tfMs = { '20s': 20000, '1m': 60000, '15m': 900000, '30m': 1800000, '1h': 3
 const localHistory = {};
 
 function connectWS() {
-  ws = new WebSocket(`ws://${location.host}`);
+  ws = new WebSocket(`${WS_PROTO}//${location.host}`);
   ws.onopen = () => {
     document.getElementById('live-indicator').style.display = 'flex';
   };
